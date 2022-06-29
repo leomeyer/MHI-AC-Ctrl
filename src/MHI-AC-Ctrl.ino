@@ -403,7 +403,7 @@ void loop() {
     #ifdef ROOM_TEMP_SHT21
     // set room temperature from SHT21 sensor if not set by MQTT
     if (!troom_was_set_by_MQTT && (new_sht21_temp > -10) && (new_sht21_temp < 48)) {  // use only values -10°C < T < 48°C
-      byte troom_int = ((byte)new_sht21_temp * 4 + 61);
+      byte troom_int = (byte)(new_sht21_temp * 4 + 61);
       mhi_ac_ctrl_core.set_troom(troom_int);
       Serial.printf("update Troom based on SHT21 value %i\n", troom_int);
       itoa(troom_int, strtmp, 10);
