@@ -11,6 +11,12 @@ MHI_AC_Ctrl_Core mhi_ac_ctrl_core;
 unsigned long room_temp_set_timeout_Millis = millis();
 bool troom_was_set_by_MQTT = false;
 
+#ifdef USE_SHT21
+uint32_t last_SHT21_read;
+float sht21_temp;
+float sht21_humid;
+#endif
+
 void MQTT_subscribe_callback(const char* topic, byte* payload, unsigned int length) {
   payload[length] = 0;  // we need a string
   Serial.printf_P(PSTR("MQTT_subscribe_callback, topic=%s payload=%s payload_length=%i\n"), topic, (char*)payload, length);
@@ -303,7 +309,12 @@ class StatusHandler : public CallbackInterface_Status {
 };
 StatusHandler mhiStatusHandler;
 
+bool ac_detected;
+
 void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
+  
   Serial.begin(115200);
   delay(100);
   Serial.println();
@@ -313,13 +324,26 @@ void setup() {
 #if TEMP_MEASURE_PERIOD > 0
   setup_ds18x20();
 #endif
+#ifdef USE_SHT21
+  setup_SHT21();
+#endif
+
   initWiFi();
-  MeasureFrequency();
+  ac_detected = MeasureFrequency();
+  Serial.print(F("AC: "));
+  Serial.println(ac_detected ? F("detected") : F("not detected"));
+
   setupOTA();
+  
   MQTTclient.setServer(MQTT_SERVER, MQTT_PORT);
   MQTTclient.setCallback(MQTT_subscribe_callback);
-  mhi_ac_ctrl_core.MHIAcCtrlStatus(&mhiStatusHandler);
-  mhi_ac_ctrl_core.init();
+  
+  if (ac_detected) {
+    mhi_ac_ctrl_core.MHIAcCtrlStatus(&mhiStatusHandler);
+    mhi_ac_ctrl_core.init();
+  }
+
+  digitalWrite(LED_BUILTIN, HIGH);
 }
 
 
@@ -328,45 +352,82 @@ void loop() {
   static int WiFiStatus = WIFI_CONNECT_TIMEOUT;
   static int MQTTStatus = MQTT_NOT_CONNECTED;
   static unsigned long previousMillis = millis();
+  
   //Serial.printf("WiFi.status()=%i\n", WiFi.status());
   if (WiFi.status() != WL_CONNECTED || WiFiStatus != WIFI_CONNECT_OK || (WiFI_SEARCHStrongestAP & (millis() - previousMillis >= WiFI_SEARCH_FOR_STRONGER_AP_INTERVALL*60*1000))) {
+    digitalWrite(LED_BUILTIN, LOW);
     setupWiFi(WiFiStatus);
     previousMillis = millis();
     //Serial.println(WiFiStatus);
   }
   else {
     MQTTStatus=MQTTreconnect();
-    if (MQTTStatus == MQTT_RECONNECTED)
+    if ((MQTTStatus == MQTT_RECONNECTED) && ac_detected)
       mhi_ac_ctrl_core.reset_old_values();  // after a reconnect
     ArduinoOTA.handle();
   }
-  
+
+  if (ac_detected) {
 #if TEMP_MEASURE_PERIOD > 0
-  byte ds18x20_value = getDs18x20Temperature(25);
+    byte ds18x20_value = getDs18x20Temperature(25);
 #ifdef ROOM_TEMP_DS18X20
-  if(ds18x20_value != ds18x20_value_old) {
-    if ((ds18x20_value > 21) & (ds18x20_value < 253)) {  // use only values -10°C < T < 48°C
-      mhi_ac_ctrl_core.set_troom(ds18x20_value);
-      ds18x20_value_old = ds18x20_value;
-      Serial.printf("update Troom based on DS18x20 value %i\n", ds18x20_value);
-    }
-  }
+    if (ds18x20_value != ds18x20_value_old) {
+      if ((ds18x20_value > 21) & (ds18x20_value < 253)) {  // use only values -10°C < T < 48°C
+        mhi_ac_ctrl_core.set_troom(ds18x20_value);
+        ds18x20_value_old = ds18x20_value;
+        Serial.printf("update Troom based on DS18x20 value %i\n", ds18x20_value);
+      }
+    }    
 #endif 
 #endif
-  // fallback to AC internal Troom temperature sensor
-  if(troom_was_set_by_MQTT & (millis() - room_temp_set_timeout_Millis >= ROOM_TEMP_MQTT_SET_TIMEOUT*1000)) {
-    mhi_ac_ctrl_core.set_troom(0xff);  // use IU temperature sensor
-    Serial.println(F("ROOM_TEMP_MQTT_SET_TIMEOUT exceeded, use IU temperature sensor value!"));
-    troom_was_set_by_MQTT=false;
   }
 
+#ifdef USE_SHT21
+  char strtmp[10];
+  if (millis() - last_SHT21_read > SHT21_READ_INTERVAL) {
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(3);
+    float new_sht21_temp = getSHT21Temperature();
+    dtostrf(new_sht21_temp, 0, 2, strtmp);
+    Serial.printf(PSTR("new SHT21 temperature=%s°C\n"), strtmp);
+    output(status_tsht21, PSTR(TOPIC_TSHT21), strtmp);
 
-  if((MQTTStatus==MQTT_RECONNECTED)|(MQTTStatus==MQTT_CONNECT_OK)){
-    //Serial.println("MQTT connected");
-    int ret = mhi_ac_ctrl_core.loop(100);
-    if (ret < 0)
-      Serial.printf_P(PSTR("mhi_ac_ctrl_core.loop error: %i\n"), ret);
+    float new_sht21_humid = getSHT21Humidity();
+    dtostrf(new_sht21_humid, 0, 2, strtmp);
+    Serial.printf(PSTR("new SHT21 humidity=%s %%\n"), strtmp);
+    output(status_hsht21, PSTR(TOPIC_HSHT21), strtmp);
+
+    last_SHT21_read = millis();
+    digitalWrite(LED_BUILTIN, HIGH);
+
+    #ifdef ROOM_TEMP_SHT21
+    // set room temperature from SHT21 sensor if not set by MQTT
+    if (!troom_was_set_by_MQTT && (new_sht21_temp > -10) && (new_sht21_temp < 48)) {  // use only values -10°C < T < 48°C
+      byte troom_int = ((byte)new_sht21_temp * 4 + 61);
+      mhi_ac_ctrl_core.set_troom(troom_int);
+      Serial.printf("update Troom based on SHT21 value %i\n", troom_int);
+      itoa(troom_int, strtmp, 10);
+      output(status_tsht21_troom, PSTR(TOPIC_TSHT21_TROOM), strtmp);
+    }
+    #endif
   }
-  /*else
-    Serial.println("MQTT NOT connected");*/
+  
+#endif  
+
+  if (ac_detected) {
+    // fallback to AC internal Troom temperature sensor
+    if(troom_was_set_by_MQTT & (millis() - room_temp_set_timeout_Millis >= ROOM_TEMP_MQTT_SET_TIMEOUT*1000)) {
+      mhi_ac_ctrl_core.set_troom(0xff);  // use IU temperature sensor
+      Serial.println(F("ROOM_TEMP_MQTT_SET_TIMEOUT exceeded, use IU temperature sensor value!"));
+      troom_was_set_by_MQTT=false;
+    }
+    if((MQTTStatus==MQTT_RECONNECTED)|(MQTTStatus==MQTT_CONNECT_OK)){
+      //Serial.println("MQTT connected");
+      int ret = mhi_ac_ctrl_core.loop(100);
+      if (ret < 0)
+        Serial.printf_P(PSTR("mhi_ac_ctrl_core.loop error: %i\n"), ret);
+    }
+  }
+
+  digitalWrite(LED_BUILTIN, HIGH);
 }

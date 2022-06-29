@@ -61,7 +61,7 @@ enum ACType {   // Type enum
 };
 
 enum ACStatus { // Status enum
-  status_rssi = type_status, status_mqtt_lost, status_wifi_lost, status_connected, status_cmd, status_tds1820, status_fsck, status_fmosi, status_fmiso, status_power, status_mode, status_fan, status_vanes, status_troom, status_tsetpoint, status_errorcode,
+  status_rssi = type_status, status_mqtt_lost, status_wifi_lost, status_connected, status_cmd, status_tds1820, status_tsht21, status_hsht21, status_tsht21_troom, status_fsck, status_fmosi, status_fmiso, status_power, status_mode, status_fan, status_vanes, status_troom, status_tsetpoint, status_errorcode,
   opdata_mode = type_opdata, opdata_tsetpoint, opdata_return_air, opdata_outdoor, opdata_tho_r1, opdata_iu_fanspeed, opdata_thi_r1, opdata_thi_r2, opdata_thi_r3,
   opdata_ou_fanspeed, opdata_total_iu_run, opdata_total_comp_run, opdata_comp, opdata_ct, opdata_td,
   opdata_tdsh, opdata_protection_no, opdata_defrost, opdata_ou_eev1, opdata_unknwon,

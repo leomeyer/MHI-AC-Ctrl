@@ -26,7 +26,8 @@ IRAM_ATTR void handleInterrupt_MISO() {
   rising_edge_cnt.MISO++;
 }
 
-void MeasureFrequency() {  // measure the frequency on the pins
+bool MeasureFrequency() {  // measure the frequency on the pins
+  bool ok = true;
   pinMode(SCK_PIN, INPUT);
   pinMode(MOSI_PIN, INPUT);
   pinMode(MISO_PIN, INPUT);
@@ -43,14 +44,18 @@ void MeasureFrequency() {  // measure the frequency on the pins
   Serial.printf_P(PSTR("SCK frequency=%iHz (expected: >3000Hz) "), rising_edge_cnt.SCK);
   if (rising_edge_cnt.SCK > 3000)
     Serial.println(F("o.k."));
-  else
+  else {
     Serial.println(F("out of range!"));
+    ok &= false;
+  }
 
   Serial.printf("MOSI frequency=%iHz (expected: <SCK frequency) ", rising_edge_cnt.MOSI);
   if ((rising_edge_cnt.MOSI > 30) & (rising_edge_cnt.MOSI < rising_edge_cnt.SCK))
     Serial.println(F("o.k."));
-  else
+  else {
     Serial.println(F("out of range!"));
+    ok &= false;
+  }
 
   Serial.printf("MISO frequency=%iHz (expected: ~0Hz) ", rising_edge_cnt.MISO);
   if (rising_edge_cnt.MISO <= 10) {
@@ -58,8 +63,9 @@ void MeasureFrequency() {  // measure the frequency on the pins
   }
   else {
     Serial.println(F("out of range!"));
-    while (1);
+    ok &= false;
   }
+  return ok;
 }
 
 
@@ -134,13 +140,13 @@ int MQTTreconnect() {
       output_P(status_connected, PSTR(TOPIC_CONNECTED), PSTR(PAYLOAD_CONNECTED_TRUE));
       output_P(status_connected, PSTR(TOPIC_VERSION), PSTR(VERSION));
       itoa(WiFi.RSSI(), strtmp, 10);
-      output_P(status_rssi, PSTR(TOPIC_RSSI), strtmp);
+      output(status_rssi, PSTR(TOPIC_RSSI), strtmp);
       itoa(WIFI_lost, strtmp, 10);
-      output_P(status_wifi_lost, PSTR(TOPIC_WIFI_LOST), strtmp);
+      output(status_wifi_lost, PSTR(TOPIC_WIFI_LOST), strtmp);
       itoa(MQTT_lost, strtmp, 10);
-      output_P(status_mqtt_lost, PSTR(TOPIC_MQTT_LOST), strtmp);
+      output(status_mqtt_lost, PSTR(TOPIC_MQTT_LOST), strtmp);
       WiFi.BSSIDstr().toCharArray(strtmp, 20);
-      output_P(status_mqtt_lost, PSTR(TOPIC_WIFI_BSSID), strtmp);             // CHECK status_mqtt_lost !!!!!!!!!!!!
+      output(status_mqtt_lost, PSTR(TOPIC_WIFI_BSSID), strtmp);             // CHECK status_mqtt_lost !!!!!!!!!!!!
 
       // for testing publish list of access points with the expected SSID 
       for (int i = 0; i < networksFound; i++)
@@ -157,11 +163,11 @@ int MQTTreconnect() {
       }
 
       itoa(rising_edge_cnt.SCK, strtmp, 10);
-      output_P(status_fsck, PSTR(TOPIC_FSCK), strtmp);
+      output(status_fsck, PSTR(TOPIC_FSCK), strtmp);
       itoa(rising_edge_cnt.MOSI, strtmp, 10);
-      output_P(status_fmosi, PSTR(TOPIC_FMOSI), strtmp);
+      output(status_fmosi, PSTR(TOPIC_FMOSI), strtmp);
       itoa(rising_edge_cnt.MISO, strtmp, 10);
-      output_P(status_fmiso, PSTR(TOPIC_FMISO), strtmp);
+      output(status_fmiso, PSTR(TOPIC_FMISO), strtmp);
       
       MQTTclient.subscribe(MQTT_SET_PREFIX "#");
       return MQTT_RECONNECTED;
@@ -192,6 +198,8 @@ void publish_cmd_invalidparameter() {
 void output_P(const ACStatus status, PGM_P topic, PGM_P payload) {
   const int mqtt_topic_size = 100;
   char mqtt_topic[mqtt_topic_size];
+  const int payload_size = 100;
+  char mqtt_payload[payload_size];
   
   Serial.printf_P(PSTR("status=%i topic=%s payload=%s\n"), status, topic, payload);
   
@@ -202,8 +210,29 @@ void output_P(const ACStatus status, PGM_P topic, PGM_P payload) {
   else if ((status & 0xc0) == type_erropdata)
     strncpy_P(mqtt_topic, PSTR(MQTT_ERR_OP_PREFIX), mqtt_topic_size);
   strncat_P(mqtt_topic, topic, mqtt_topic_size - strlen(mqtt_topic));
-  MQTTclient.publish_P(mqtt_topic, payload, true);
+
+  strncpy_P(mqtt_payload, payload, payload_size);
+  
+  MQTTclient.publish(mqtt_topic, mqtt_payload, true);
 }
+
+void output(const ACStatus status, PGM_P topic, char* payload) {
+  const int mqtt_topic_size = 100;
+  char mqtt_topic[mqtt_topic_size];
+
+  if ((status & 0xc0) == type_status)
+    strncpy_P(mqtt_topic, PSTR(MQTT_PREFIX), mqtt_topic_size);
+  else if ((status & 0xc0) == type_opdata)
+    strncpy_P(mqtt_topic, PSTR(MQTT_OP_PREFIX), mqtt_topic_size);
+  else if ((status & 0xc0) == type_erropdata)
+    strncpy_P(mqtt_topic, PSTR(MQTT_ERR_OP_PREFIX), mqtt_topic_size);
+  strncat_P(mqtt_topic, topic, mqtt_topic_size - strlen(mqtt_topic));
+
+  Serial.printf(PSTR("status=%i topic=%s payload=%s\n"), status, topic, payload);
+  
+  MQTTclient.publish(mqtt_topic, payload, true);
+}
+
 
 #if TEMP_MEASURE_PERIOD > 0
 OneWire oneWire(ONE_WIRE_BUS);       // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
@@ -222,7 +251,7 @@ byte getDs18x20Temperature(int temp_hysterese) {
       char strtmp[10];
       dtostrf(sensors.rawToCelsius(tempR), 0, 2, strtmp);
       //Serial.printf_P(PSTR("new DS18x20 temperature=%s°C\n"), strtmp);
-      output_P(status_tds1820, PSTR(TOPIC_TDS1820), strtmp);
+      output(status_tds1820, PSTR(TOPIC_TDS1820), strtmp);
     }
     DS1820Millis = millis();
     sensors.requestTemperatures();
@@ -291,3 +320,23 @@ void setupOTA() {
   ArduinoOTA.begin();
   Serial.println(F("OTA Ready"));
 }
+
+// ******* SHT21 temperature/humidity sensor *******
+
+#ifdef USE_SHT21
+
+SHT21 sht;
+
+void setup_SHT21() {
+  Wire.begin();
+}
+
+float getSHT21Temperature() {
+  return sht.getTemperature();
+}
+
+float getSHT21Humidity() {
+  return sht.getHumidity();
+}
+
+#endif  // USE_SHT21
