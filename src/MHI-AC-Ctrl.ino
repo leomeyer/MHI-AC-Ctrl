@@ -17,6 +17,8 @@ float sht21_temp;
 float sht21_humid;
 #endif
 
+unsigned long outdoor_sent_millis = 0;
+
 void MQTT_subscribe_callback(const char* topic, byte* payload, unsigned int length) {
   payload[length] = 0;  // we need a string
   Serial.printf_P(PSTR("MQTT_subscribe_callback, topic=%s payload=%s payload_length=%i\n"), topic, (char*)payload, length);
@@ -251,6 +253,7 @@ class StatusHandler : public CallbackInterface_Status {
         case opdata_outdoor:
           dtostrf((value - 94) * 0.25f, 0, 2, strtmp);
           output_P(status, PSTR(TOPIC_OUTDOOR), strtmp);
+          outdoor_sent_millis = millis();
           break;
         case opdata_tho_r1:
         case erropdata_tho_r1:
@@ -411,8 +414,15 @@ void loop() {
     }
     #endif
   }
-  
 #endif  
+
+  if (millis() - outdoor_sent_millis > 30000) {
+    // only send value if it is valid
+    if (mhi_ac_ctrl_core.get_outdoor() < 0xff)
+      mhiStatusHandler.cbiStatusFunction(opdata_outdoor, mhi_ac_ctrl_core.get_outdoor());
+    else
+      outdoor_sent_millis = millis();
+  }
 
   if (ac_detected) {
     // fallback to AC internal Troom temperature sensor

@@ -1,5 +1,6 @@
 #include "support.h"
 #include <Arduino.h>
+#include <Regexp.h>
 
 WiFiClient espClient;
 PubSubClient MQTTclient(espClient);
@@ -83,14 +84,22 @@ void setupWiFi(int& WiFiStatus) {
   int max_rssi = -999;
   int strongest_AP = -1;
   static unsigned long WiFiTimeoutMillis;
+  char strtmp[50];
 
   if(WiFiStatus != WIFI_CONNECT_ONGOING) {
     WiFi.scanDelete();
     int networksFound = WiFi.scanNetworks();
     for (int i = 0; i < networksFound; i++)
     {
+      // test whether the SSID matches the defined regex pattern
+      strcpy(strtmp, WiFi.SSID(i).c_str());
+      MatchState ms;
+      ms.Target(strtmp);
+      if (ms.Match(WIFI_SSID_REGEX) <= 0)
+        continue;
+
       Serial.printf("%2d %25s %2d %ddBm %s %s %02x\n", i + 1, WiFi.SSID(i).c_str(), WiFi.channel(i), WiFi.RSSI(i), WiFi.BSSIDstr(i).c_str(), WiFi.encryptionType(i) == ENC_TYPE_NONE ? "open" : "secured"),  (uint)WiFi.encryptionType(i);
-      if((strcmp(WiFi.SSID(i).c_str(), WIFI_SSID) == 0) && (WiFi.RSSI(i)>max_rssi)){
+      if (WiFi.RSSI(i)>max_rssi) {
           max_rssi = WiFi.RSSI(i);
           strongest_AP = i;
       }
@@ -99,20 +108,19 @@ void setupWiFi(int& WiFiStatus) {
     if((WiFi.status() != WL_CONNECTED) || ((max_rssi > WiFi.RSSI() + 10) && (strcmp(WiFi.BSSIDstr().c_str(), WiFi.BSSIDstr(strongest_AP).c_str()) != 0))) {
       if(strongest_AP != -1) {
         Serial.printf("Connecting from bssid:%s to bssid:%s, channel:%i\n", WiFi.BSSIDstr().c_str(), WiFi.BSSIDstr(strongest_AP).c_str(), WiFi.channel(strongest_AP));
-        WiFi.begin(WIFI_SSID, WIFI_PASSWORD, WiFi.channel(strongest_AP), WiFi.BSSID(strongest_AP), true);
+        WiFi.begin(WiFi.SSID(strongest_AP), WIFI_PASSWORD, WiFi.channel(strongest_AP), WiFi.BSSID(strongest_AP), true);
+        WiFiStatus = WIFI_CONNECT_ONGOING;
+        Serial.println("WIFI_CONNECT_ONGOING");
+        WiFiTimeoutMillis = millis();
       }
       else {
-        Serial.println("No matching AP found (maybe hidden SSID), however try to connect.");
-        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+        Serial.println("No AP found, retrying...");
       }
-      WiFiStatus = WIFI_CONNECT_ONGOING;
-      Serial.println("WIFI_CONNECT_ONGOING");
-      WiFiTimeoutMillis = millis();
     }
   }
   else {
     if(WiFi.status() == WL_CONNECTED){
-      Serial.printf_P(PSTR(" connected to %s, IP address: %s (%ddBm)\n"), WIFI_SSID, WiFi.localIP().toString().c_str(), WiFi.RSSI());  // warum wird diese Zeile nicht ausgegeben?
+      Serial.printf_P(PSTR(" connected to %s, IP address: %s (%ddBm)\n"), WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
       WiFiStatus = WIFI_CONNECT_OK;
       Serial.println("WIFI_CONNECT_OK");
     }
@@ -145,21 +153,23 @@ int MQTTreconnect() {
       output(status_wifi_lost, PSTR(TOPIC_WIFI_LOST), strtmp);
       itoa(MQTT_lost, strtmp, 10);
       output(status_mqtt_lost, PSTR(TOPIC_MQTT_LOST), strtmp);
+      WiFi.SSID().toCharArray(strtmp, 20);
+      output(status_wifi_ssid, PSTR(TOPIC_WIFI_SSID), strtmp);
+      WiFi.localIP().toString().toCharArray(strtmp, 20);
+      output(status_wifi_ip, PSTR(TOPIC_WIFI_IP), strtmp);
       WiFi.BSSIDstr().toCharArray(strtmp, 20);
-      output(status_mqtt_lost, PSTR(TOPIC_WIFI_BSSID), strtmp);             // CHECK status_mqtt_lost !!!!!!!!!!!!
+      output(status_wifi_bssid, PSTR(TOPIC_WIFI_BSSID), strtmp);
 
-      // for testing publish list of access points with the expected SSID 
+      // for testing publish list of access points
       for (int i = 0; i < networksFound; i++)
       {
-        if(strcmp(WiFi.SSID(i).c_str(), WIFI_SSID) == 0){
-          strcpy(strtmp, "BSSID:");
-          strcat(strtmp, WiFi.BSSIDstr(i).c_str());
-          char strtmp2[20];
-          strcat(strtmp, " RSSI:");
-          itoa(WiFi.RSSI(i), strtmp2, 10);
-          strcat(strtmp, strtmp2);
-          MQTTclient.publish(MQTT_PREFIX "APs", strtmp, true);
-        }
+        strcpy(strtmp, "BSSID:");
+        strcat(strtmp, WiFi.BSSIDstr(i).c_str());
+        char strtmp2[20];
+        strcat(strtmp, " RSSI:");
+        itoa(WiFi.RSSI(i), strtmp2, 10);
+        strcat(strtmp, strtmp2);
+        MQTTclient.publish(MQTT_PREFIX "APs", strtmp, true);
       }
 
       itoa(rising_edge_cnt.SCK, strtmp, 10);
